@@ -1,18 +1,26 @@
 version: '2'
 services:
+
+
   server:
     build:
       context: server
-    #ports:  #You can uncomment this to help you to debug
-    #  - "5080:80"
+    ports:  #You can uncomment this to help you to debug
+      - "5080:80"
     depends_on:
       - mqtt-broker
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5080/ready | grep -q YES | echo $?"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   mqtt-broker:
     image: eclipse-mosquitto:1.6
     hostname: mosquitto
-    #ports:  #You can uncomment this to help you to debug
-    #  - "1883:1883"
+    ports:  #You can uncomment this to help you to debug
+      - "1883:1883"
     volumes:
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/logs
@@ -22,14 +30,15 @@ services:
     build:
       context: client
     depends_on:
-      - mqtt-broker
-      - server
+      server:
+        condition: service_healthy #will execute only if service is running fine
 
   rf-test:
     build:
       context: rf_test
     depends_on:
       - server
+      - client
     volumes:
       - ./results:/usr/src/app/results
 

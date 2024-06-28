@@ -6,4 +6,6 @@ COPY tests.sh test-server.robot requirements.txt ./
 
 RUN pip install -r requirements.txt
 
+RUN apk update && apk add --no-cache curl
+
 CMD ["sh", "tests.sh"]

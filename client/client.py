@@ -1,5 +1,9 @@
-from threading import Event
+from threading import Event, Thread
 from typing import Optional, Any
+import queue
+import requests
+import json
+import time
 
 import paho.mqtt.client as mqtt
 
@@ -8,7 +12,12 @@ import paho.mqtt.client as mqtt
 mqtt_client: Optional[mqtt.Client] = None
 
 mqtt_connection_event = Event()
-
+wait_event = Event()
+mqtt_topic="secret/number"
+message_queue = queue.Queue()
+Post_request_url="http://server:80/secret_number"
+Secret_check_url="http://server:80/secret_correct"
+server_ready_url="http://server:80/ready"
 secret = -1
 
 
@@ -19,12 +28,37 @@ def send_secret_rest(secret_value: int):
     #
     # Assuming secret_value = 50, then the request will contain the following
     # body: {"value": 50}
-    pass
+    data = {"value": secret_value}
+    try:
+        response = requests.post(Post_request_url, json=data)
+        if response.status_code == 200:
+            print(f"Successfully posted the secret number {secret_value} to the REST server")
+
+            # to check data integrity (secret sent and received)
+            response=requests.get(Secret_check_url)
+            if response.text == "YES":
+                print("Secret received from server and sent by client are same")
+            else:
+                print("Secret received from server and sent by client are not same, mismatch between secret read and write")
+
+        else:
+            print(f"Failed to post to the REST server. Status code: {response.status_code}")
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error occurred while sending POST request: {e}")
+    
 
 
 def on_mqtt_connect(client, userdata, flags, rc):
-    print('Connected to MQTT broker')
-    mqtt_connection_event.set()
+    if(rc==0):
+        print('Connected to MQTT broker')
+        mqtt_connection_event.set()
+        client.subscribe(mqtt_topic)
+    else:
+        print("Failed to connect, return code %d\n", rc)
+
+    #added condition in above method to fail the program in case it is failed to connect to mqtt broker
+    
 
 
 def on_mqtt_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage):
@@ -32,7 +66,20 @@ def on_mqtt_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage):
     # we are interested just on the value) and send this value to the REST
     # server... or maybe the sending to REST should be done somewhere else...
     # do you have any idea why?
-    pass
+
+    try:
+        payload = json.loads(msg.payload.decode())
+        secret_number = payload.get("value")
+        if secret_number is not None:
+            print(f"Received secret number: {secret_number} from topic: {msg.topic}")
+
+            # Put the secret number into the queue
+            message_queue.put(secret_number)
+            wait_event.wait(1)
+            
+    except json.JSONDecodeError:
+        print("Failed to decode JSON from message payload")
+
 
 
 def connect_mqtt() -> mqtt.Client:
@@ -53,7 +100,23 @@ def wait_for_server_ready():
     # is anything useful that can help.
     # Hint: If you prefer, feel free to delete this method, use an external
     # tool and incorporate it in the Dockerfile
+
+    #checking for a specified period of time if server is ready or not
     pass
+
+    
+    
+
+
+def process_queue():
+    while True:
+        # Get the secret number from the queue
+        secret_number = message_queue.get()
+        if secret_number is None:
+            break
+        # Send the secret number to the REST server
+        send_secret_rest(secret_number)
+
 
 
 def main():
@@ -71,17 +134,26 @@ def main():
     # resource `/secret_number`, with a JSON body like: {"value": 50}
     # 4. (Extra) Check the REST resource `/secret_correct` to ensure it was
     # properly set
-    # 5. Terminate the script, only after at least a value was sent
 
+    # Start the queue processing in a separate thread
+    queue_thread = Thread(target=process_queue)
+    queue_thread.start()
 
+  # Keep the script running to process messages
     try:
+        while True:
+            pass
+    except KeyboardInterrupt:
+        pass
+    finally:
         mqtt_client.disconnect()
-    except Exception:
-        pass
-    try:
         mqtt_client.loop_stop()
-    except Exception:
-        pass
+
+        # Signal the queue processing thread to exit
+        message_queue.put(None)
+
+        # Wait for the queue processing thread to finish
+        queue_thread.join()
 
 
 if __name__ == '__main__':
